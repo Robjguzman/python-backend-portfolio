@@ -6,7 +6,7 @@ import smtplib
 from dotenv import load_dotenv
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-#new change
+#newa
 
 load_dotenv()  # Load environment variables from .env file
 
