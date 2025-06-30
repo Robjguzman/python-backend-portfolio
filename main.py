@@ -6,6 +6,7 @@ import psycopg2
 import smtplib
 from email.message import EmailMessage
 
+
 load_dotenv()
 
 app = Flask(__name__)
