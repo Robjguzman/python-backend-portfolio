@@ -1,103 +1,75 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from dotenv import load_dotenv
 import os
 import psycopg2
 import smtplib
-from dotenv import load_dotenv
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-#newa
+from email.message import EmailMessage
 
-load_dotenv()  # Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS
+CORS(app, supports_credentials=True)
 
-# Database connection
-conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
+conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+cursor = conn.cursor()
 
+@app.route("/", methods=["POST"])
+def save_contact():
+    data = request.get_json()
+    name = data.get("name")
+    email = data.get("email")
+    message = data.get("message")
 
-# Email sending function
+    cursor.execute(
+        "INSERT INTO contacts(name, email, message) VALUES (%s, %s, %s) RETURNING id;",
+        (name, email, message)
+    )
+    saved_id = cursor.fetchone()[0]
+    conn.commit()
+
+    send_email_notification(name, email, message)
+
+    return jsonify({"id": saved_id, "name": name, "email": email, "message": message})
+
+@app.route("/api/messages", methods=["POST"])
+def save_api_message():
+    data = request.get_json()
+    message = data.get("message")
+    status = data.get("status")
+
+    cursor.execute(
+        "INSERT INTO api_messages(message, status) VALUES (%s, %s) RETURNING id;",
+        (message, status)
+    )
+    saved_id = cursor.fetchone()[0]
+    conn.commit()
+
+    return jsonify({"id": saved_id, "message": message, "status": status})
+
+@app.route("/api/messages", methods=["GET"])
+def get_all_messages():
+    cursor.execute("SELECT * FROM api_messages ORDER BY created_at DESC;")
+    messages = cursor.fetchall()
+    return jsonify(messages)
+
 def send_email_notification(name, user_email, message):
-    try:
-        print("Setting up email server...")
-        server = smtplib.SMTP_SSL(os.environ.get("EMAIL_SERVICE"), 465)
-        server.login(os.environ.get("EMAIL_USERNAME"), os.environ.get("EMAIL_PASSWORD"))
+    msg_owner = EmailMessage()
+    msg_owner.set_content(f"You received a message from {name} ({user_email}): {message}")
+    msg_owner["Subject"] = "New Portfolio Message"
+    msg_owner["From"] = os.getenv("EMAIL_USERNAME")
+    msg_owner["To"] = "robertjguzman15@gmail.com"
 
-        # Email to the website owner
-        owner_email = os.environ.get("OWNER_EMAIL", "robertjguzman15@gmail.com")
-        owner_msg = MIMEMultipart()
-        owner_msg['From'] = os.environ.get("EMAIL_USERNAME")
-        owner_msg['To'] = owner_email
-        owner_msg['Subject'] = "New Portfolio Message"
-        owner_msg.attach(MIMEText(f"You have received a new message from {name} ({user_email}): {message}", 'plain'))
+    msg_user = EmailMessage()
+    msg_user.set_content(f"Hi {name},\n\nThanks for reaching out! Here's your message:\n\n{message}")
+    msg_user["Subject"] = "We Received Your Message"
+    msg_user["From"] = os.getenv("EMAIL_USERNAME")
+    msg_user["To"] = user_email
 
-        # Email to the user
-        user_msg = MIMEMultipart()
-        user_msg['From'] = os.environ.get("EMAIL_USERNAME")
-        user_msg['To'] = user_email
-        user_msg['Subject'] = "Your Message Has Been Received"
-        user_msg.attach(MIMEText(
-            f"Hello {name},\n\nWe have received your message and will get back to you as soon as possible. Here's what you sent us:\n\n{message}",
-            'plain'))
+    with smtplib.SMTP_SSL(os.getenv("EMAIL_SERVICE"), 465) as smtp:
+        smtp.login(os.getenv("EMAIL_USERNAME"), os.getenv("EMAIL_PASSWORD"))
+        smtp.send_message(msg_owner)
+        smtp.send_message(msg_user)
 
-        print("Sending emails...")
-        server.send_message(owner_msg)
-        server.send_message(user_msg)
-        server.quit()
-
-        print("Emails sent successfully.")
-    except Exception as e:
-        print(f"Error occurred in send_email_notification: {e}")
-
-
-# POST endpoint to receive messages
-@app.route("/api/messages", methods=['POST'])
-def post_message():
-    data = request.json
-    name = data['name']
-    email = data['email']
-    message = data['message']
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO contacts(name, email, message) VALUES (%s, %s, %s) RETURNING *",
-            (name, email, message)
-        )
-        saved_message = cursor.fetchone()
-        conn.commit()
-        cursor.close()
-
-        print(f"Message saved to PostgreSQL with ID: {saved_message[0]}")
-
-        # Send email notification
-        send_email_notification(name, email, message)
-
-        return jsonify({"id": saved_message[0], "name": name, "email": email, "message": message}), 200
-    except Exception as e:
-        print(f"Error in POST /api/messages: {e}")
-        return f"Server error: {e}", 500
-
-
-# GET endpoint to retrieve messages
-@app.route("/api/messages", methods=['GET'])
-def get_messages():
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM contacts")
-        messages = cursor.fetchall()
-        conn.commit()
-        cursor.close()
-
-        print("Retrieved all messages")
-        return jsonify(messages), 200
-    except Exception as e:
-        print(f"Error in GET /api/messages: {e}")
-        return f"Server error: {e}", 500
-
-
-# Start the server
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5001))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(port=5004)
